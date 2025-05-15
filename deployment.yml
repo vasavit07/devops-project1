@@ -34,3 +34,4 @@ spec:
     ports:
         - port: 80 #cluster port
           targetPort: 8080 #container image port
+
