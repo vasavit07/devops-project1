@@ -1,71 +1,94 @@
 pipeline {
-    agent { label 'Agent2' }
+    agent { label 'Agent1' }
+
     environment {
         GIT_REPO = 'https://github.com/vasavit07/devops-project1.git'
         BRANCH = 'main'
-        DOCKER_IMAGE = 'dockeradmin84/devops-project1'
-        DOCKER_TAG = 'latest'
+        IMAGE_NAME = 'my-tomcat-app'
+        CONTAINER_NAME = 'my-tomcat-app-container'
+        HOST_PORT = '8888'
+        CONTAINER_PORT = '8080'
+        DOCKER_REGISTRY = 'docker.io/dockeradmin84'
+        K8S_DEPLOYMENT_NAME = 'abcapp1'
+        WORK_DIR = "${WORKSPACE}"
     }
 
     stages {
-        stage('Clone') {
+        stage('Clone Source Code') {
             steps {
-                git url: "${GIT_REPO}", branch: "${BRANCH}", credentialsId: '2c888d9c-0db8-4373-89e5-a0fda218abb3'
+                git url: "${GIT_REPO}", branch: "${BRANCH}"
             }
         }
 
-        stage('Build') {
+        stage('Build WAR') {
             steps {
-                dir('/opt/jenagenthome/workspace/') {
-                    echo "Build step done"
+                sh 'mvn clean package'
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh '''
+                    echo "Building Docker image..."
+                    docker build -t $IMAGE_NAME .
+                '''
+            }
+        }
+
+        stage('Tag & Push Docker Image') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'DOCKERHUB_CREDS', 
+                        usernameVariable: 'DOCKER_USERNAME', 
+                        passwordVariable: 'DOCKER_PASSWORD'
+                    )
+                ]) {
+                    sh '''
+                        echo "Tagging Docker image..."
+                        docker tag $IMAGE_NAME $DOCKER_REGISTRY/$IMAGE_NAME:latest
+
+                        echo "Logging into Docker Hub..."
+                        echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+
+                        echo "Pushing image..."
+                        docker push $DOCKER_REGISTRY/$IMAGE_NAME:latest
+                    '''
                 }
             }
         }
 
-        stage('Compile') {
+        stage('Deploy Container (Local Docker)') {
             steps {
-                dir('/opt/jenagenthome/workspace/Package_docker_V3/') {
-                    sh 'mvn compile'
-                }
+                sh '''
+                    echo "Stopping old container if running..."
+                    docker rm -f $CONTAINER_NAME || true
+
+                    echo "Starting new container..."
+                    docker run -d --name $CONTAINER_NAME -p $HOST_PORT:$CONTAINER_PORT $IMAGE_NAME
+                '''
             }
         }
 
-        stage('Test') {
+        stage('Deploy to Kubernetes') {
             steps {
-                dir('/opt/jenagenthome/workspace/Package_docker_V3/') {
-                    sh 'mvn test'
-                }
-            }
-        }
+                withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
+                    sh '''
+                        echo "Deploying to Kubernetes..."
 
-        stage('Package') {
-            steps {
-                dir('/opt/jenagenthome/workspace/Package_docker_V3') {
-                    sh 'mvn package'
-                }
-            }
-        }
-        
-        stage('Docker Build & Push') {
-            steps {
-                script {
-                    withCredentials([
-                        usernamePassword(
-                            credentialsId: 'DOCKERHUB_CREDS',
-                            usernameVariable: 'DOCKER_USERNAME',
-                            passwordVariable: 'DOCKER_PASSWORD'
-                        )
-                    ]) {
-                        // Docker login
-                        sh "echo ${DOCKER_PASSWORD} | docker login -u ${DOCKER_USERNAME} --password-stdin"
-                        echo "Logged into Docker Hub successfully!"
+                        kubectl config use-context kubernetes-admin@kubernetes
 
-                        // Docker build
-                        sh "docker build -t ${DOCKER_IMAGE}:${DOCKER_TAG} /opt/jenagenthome/workspace/Package_docker_V3"
+                        kubectl delete deployment $K8S_DEPLOYMENT_NAME --ignore-not-found
 
-                        // Docker push
-                        sh "docker push ${DOCKER_IMAGE}:${DOCKER_TAG}"
-                    }
+                        kubectl create deployment $K8S_DEPLOYMENT_NAME --image=$DOCKER_REGISTRY/$IMAGE_NAME:latest
+
+                        if [ -f "$WORK_DIR/app.yml" ]; then
+                            echo "Applying custom app.yml..."
+                            kubectl apply -f $WORK_DIR/app.yml
+                        else
+                            echo "⚠️ No custom app.yml found. Skipping apply step."
+                        fi
+                    '''
                 }
             }
         }
@@ -73,7 +96,11 @@ pipeline {
 
     post {
         success {
-            archiveArtifacts artifacts: '**/target/**', fingerprint: true
+            echo "✅ Deployment completed. Access your app at: http://98.80.10.185:$HOST_PORT/app"
+        }
+        failure {
+            echo "❌ Pipeline failed. Please check the logs above."
         }
     }
 }
+
