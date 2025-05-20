@@ -1,35 +1,43 @@
-- hosts: localhost
-  become: yes
+---
+- hosts: all
+  become: true
   vars:
     ansible_python_interpreter: /usr/bin/python3
-  tasks:
-        - name: Build an image and push it to a private repo
-          community.docker.docker_image:
-              build:
-                  path: "/opt/jenagenthome/workspace/package_Docker_V3/"
-              name: docker.io/vasavitavisala/abctechnologies
-              #tag: test
-              push: true
-              source: build
-          register: out
-        - debug:
-              var: out
-        - name: start a container
-          community.docker.docker_container:
-             name: abc-application
-             image: vasavitavisala/abctechnologies
-             state: started
-             ports:
-                 - 1234:8080
-             #restart: true
-          register: out
-        - debug:
-              var: out
-             #- name: Deploying to kubernetes
-        - name: Create a Deployment by reading the definition from a local file
-          command: "kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f /opt/jenagenthome/workspace/package_Docker_V3/deployment.yml"
-          register: out
-        - debug:
-              var: out
 
+  tasks:
+    - name: Log in to Docker Hub
+      command: "docker login -u dockeradmin84 -p RikkiSuki@143"
+
+    - name: Build the Docker image
+      community.docker.docker_image:
+        name: dockeradmin84/devops-project1
+        tag: latest
+        build:
+          path: "/home/ubuntu/retail_ansible/"
+        push: true
+      register: build_result
+
+    - debug:
+        var: build_result
+
+    - name: Start a Docker container
+      community.docker.docker_container:
+        name: abc-application
+        image: dockeradmin84/devops-project1:latest
+        state: started
+        ports:
+          - "1234:8080"
+      register: container_result
+
+    - debug:
+        var: container_result
+
+    - name: Deploy to Kubernetes
+      command: >
+        kubectl --kubeconfig=/etc/kubernetes/admin.conf
+        apply -f /home/ubuntu/retail_ansible/app.yml
+      register: kubectl_result
+
+    - debug:
+        var: kubectl_result
 
